@@ -1,0 +1,544 @@
+// prisma/schema.prisma
+// PixVault - Event & Media Management Platform
+// Database schema following enterprise best practices
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  PHOTOGRAPHER
+  CLUB_MEMBER
+  VIEWER
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum EventCategory {
+  PHOTOSHOOT
+  WORKSHOP
+  TRIP
+  COMPETITION
+  CULTURAL_FEST
+  PARTY
+  SEMINAR
+  SPORTS
+  OTHER
+}
+
+enum AccessLevel {
+  PUBLIC
+  MEMBERS_ONLY
+  PRIVATE
+}
+
+enum NotificationType {
+  LIKE
+  COMMENT
+  TAG
+  FOLLOW
+  SHARE
+  UPLOAD
+  MENTION
+  EVENT_INVITE
+  SYSTEM
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ─────────────────────────────────────────────
+// USERS & AUTH
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  username      String    @unique
+  name          String
+  bio           String?
+  avatarUrl     String?
+  coverUrl      String?
+  role          UserRole  @default(VIEWER)
+  isActive      Boolean   @default(true)
+  isBanned      Boolean   @default(false)
+
+  // Face recognition reference selfie
+  faceDescriptor Float[]  // stored as float array from face-api.js
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Auth relations
+  accounts      Account[]
+  sessions      Session[]
+
+  // Club memberships
+  memberships   ClubMember[]
+
+  // Content relations
+  ownedEvents   Event[]         @relation("EventOwner")
+  uploadedMedia Media[]         @relation("Uploader")
+
+  // Social
+  likes         Like[]
+  comments      Comment[]
+  tags          MediaTag[]      @relation("TaggedUser")
+  taggedBy      MediaTag[]      @relation("TaggerUser")
+  shares        Share[]
+  favorites     Favorite[]
+  followers     Follow[]        @relation("Following")
+  following     Follow[]        @relation("Follower")
+
+  // Stories
+  stories        Story[]  @relation("StoryAuthor")
+  storyViews     StoryView[]
+  collaborations AlbumCollaborator[]
+
+  // Notifications
+  notifications         Notification[] @relation("NotificationRecipient")
+  sentNotifications     Notification[] @relation("NotificationSender")
+
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────────────────────────
+// CLUBS
+// ─────────────────────────────────────────────
+
+model Club {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  logoUrl     String?
+  coverUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     ClubMember[]
+  events      Event[]
+
+  @@index([slug])
+  @@map("clubs")
+}
+
+model ClubMember {
+  id        String   @id @default(cuid())
+  userId    String
+  clubId    String
+  role      UserRole @default(CLUB_MEMBER)
+  joinedAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clubId])
+  @@map("club_members")
+}
+
+// ─────────────────────────────────────────────
+// EVENTS
+// ─────────────────────────────────────────────
+
+model Event {
+  id          String        @id @default(cuid())
+  title       String
+  slug        String        @unique
+  description String?       @db.Text
+  coverUrl    String?
+  category    EventCategory @default(OTHER)
+  status      EventStatus   @default(DRAFT)
+  accessLevel AccessLevel   @default(PUBLIC)
+  location    String?
+  startDate   DateTime?
+  endDate     DateTime?
+
+  ownerId String
+  clubId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner  User    @relation("EventOwner", fields: [ownerId], references: [id])
+  club   Club?   @relation(fields: [clubId], references: [id])
+  albums Album[]
+  media  Media[]
+  stories Story[] @relation("EventStories")
+
+  @@index([slug])
+  @@index([status])
+  @@index([category])
+  @@index([ownerId])
+  @@map("events")
+}
+
+// ─────────────────────────────────────────────
+// ALBUMS
+// ─────────────────────────────────────────────
+
+model Album {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  coverUrl    String?
+  accessLevel AccessLevel @default(PUBLIC)
+  eventId     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event         Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  media         Media[]
+  collaborators AlbumCollaborator[]
+
+  @@map("albums")
+}
+
+// ─────────────────────────────────────────────
+// MEDIA
+// ─────────────────────────────────────────────
+
+model Media {
+  id          String    @id @default(cuid())
+  type        MediaType @default(IMAGE)
+  title       String?
+  description String?
+
+  // Storage
+  s3Key       String    @unique
+  s3Bucket    String
+  originalUrl String
+  thumbnailUrl String?
+  previewUrl  String?
+
+  // File metadata
+  fileSize    Int       // bytes
+  mimeType    String
+  width       Int?
+  height      Int?
+  duration    Float?    // for videos, in seconds
+  blurHash    String?   // for image loading placeholders
+
+  // AI generated data
+  aiTags      String[]  // e.g. ["mountains", "sunset", "crowd"]
+  aiCaption   String?
+  faceDescriptors Json? // array of face descriptor objects
+
+  // Access
+  accessLevel AccessLevel @default(PUBLIC)
+  isWatermarked Boolean   @default(false)
+
+  // Relations
+  uploaderId  String
+  eventId     String
+  albumId     String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  uploader    User     @relation("Uploader", fields: [uploaderId], references: [id])
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  album       Album?   @relation(fields: [albumId], references: [id])
+
+  likes       Like[]
+  comments    Comment[]
+  tags        MediaTag[]
+  shares      Share[]
+  favorites   Favorite[]
+  stories     Story[]
+  searchIndex MediaSearch?
+
+  @@index([eventId])
+  @@index([uploaderId])
+  @@index([accessLevel])
+  @@index([aiTags])
+  @@map("media")
+}
+
+// Full-text search index for media
+model MediaSearch {
+  id        String @id @default(cuid())
+  mediaId   String @unique
+  content   String @db.Text // concatenated searchable content
+
+  media     Media  @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@map("media_search")
+}
+
+// ─────────────────────────────────────────────
+// SOCIAL FEATURES
+// ─────────────────────────────────────────────
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  mediaId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@map("likes")
+}
+
+model Comment {
+  id        String    @id @default(cuid())
+  content   String    @db.Text
+  userId    String
+  mediaId   String
+  parentId  String?   // for threaded comments
+  isEdited  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media    Media     @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  parent   Comment?  @relation("CommentThread", fields: [parentId], references: [id])
+  replies  Comment[] @relation("CommentThread")
+
+  @@map("comments")
+}
+
+model MediaTag {
+  id         String   @id @default(cuid())
+  mediaId    String
+  taggedUserId String
+  taggerUserId String
+  x          Float?   // position on image (0-1)
+  y          Float?
+  createdAt  DateTime @default(now())
+
+  media      Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  taggedUser User  @relation("TaggedUser", fields: [taggedUserId], references: [id])
+  taggerUser User  @relation("TaggerUser", fields: [taggerUserId], references: [id])
+
+  @@unique([mediaId, taggedUserId])
+  @@map("media_tags")
+}
+
+model Share {
+  id        String   @id @default(cuid())
+  userId    String
+  mediaId   String
+  platform  String?  // "twitter", "whatsapp", "link" etc.
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@map("shares")
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  mediaId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mediaId])
+  @@map("favorites")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@map("follows")
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────
+
+model Notification {
+  id          String           @id @default(cuid())
+  type        NotificationType
+  recipientId String
+  senderId    String?
+  entityId    String?          // id of the media/event/comment that triggered it
+  entityType  String?          // "media" | "event" | "comment"
+  message     String
+  isRead      Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+
+  recipient User  @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  sender    User? @relation("NotificationSender", fields: [senderId], references: [id])
+
+  @@index([recipientId, isRead])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────
+// BACKGROUND JOBS
+// ─────────────────────────────────────────────
+
+model Job {
+  id        String    @id @default(cuid())
+  type      String    // "ai_tag", "face_detect", "watermark", "thumbnail"
+  payload   Json
+  status    JobStatus @default(PENDING)
+  attempts  Int       @default(0)
+  error     String?
+  result    Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status])
+  @@map("jobs")
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────
+// STORIES (24-hour expiring, Instagram-style)
+// ─────────────────────────────────────────────
+
+model Story {
+  id              String    @id @default(cuid())
+  authorId        String
+  mediaId         String
+  eventId         String
+  caption         String?
+  durationSeconds Int       @default(5)
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  author User       @relation("StoryAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  media  Media      @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  event  Event      @relation("EventStories", fields: [eventId], references: [id], onDelete: Cascade)
+  views  StoryView[]
+
+  @@index([eventId])
+  @@index([authorId])
+  @@index([expiresAt])
+  @@map("stories")
+}
+
+model StoryView {
+  id       String   @id @default(cuid())
+  userId   String
+  storyId  String
+  viewedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storyId])
+  @@map("story_views")
+}
+
+// ─────────────────────────────────────────────
+// COLLABORATIVE ALBUMS
+// ─────────────────────────────────────────────
+
+model AlbumCollaborator {
+  id        String   @id @default(cuid())
+  albumId   String
+  userId    String
+  canUpload Boolean  @default(true)
+  addedAt   DateTime @default(now())
+
+  album Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([albumId, userId])
+  @@map("album_collaborators")
+}
