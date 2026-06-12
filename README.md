@@ -218,5 +218,4 @@ A `Dockerfile` can be added. The app needs:
 ---
 
 ## 📄 License
-
-MIT © PixVault Contributors
+Krish Goyal
